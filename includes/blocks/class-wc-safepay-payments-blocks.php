@@ -11,6 +11,7 @@ final class WC_Safepay_Gateway_Blocks_Support extends AbstractPaymentMethodType
 	 * @var WC_Safepay_Gateway
 	 */
 	private $gateway;
+	private $icon;
 
 	/**
 	 * Payment method name/id/slug.
@@ -24,17 +25,20 @@ final class WC_Safepay_Gateway_Blocks_Support extends AbstractPaymentMethodType
 	 */
 	public function initialize()
 	{
-
+	
 		$gateways       = WC()->payment_gateways->payment_gateways();
 		$this->gateway  = $gateways[$this->name];
-
+		
+		 $plugin_image_url =  plugins_url( "/assets/image/logo.png", 'safepay-plugin' );
+		
 		$this->settings = [
 			'title' => $this->gateway->get_option('title'),
+			'icon' =>   $plugin_image_url,
 			'description' => $this->gateway->get_option('description'),
 			'supports'    => array_filter($this->gateway->supports, [$this->gateway, 'supports'])
 		];
 	}
-
+// 'icon' => 'https://uploads-ssl.webflow.com/5f2d8cefa1f1ec3622a82394/5f2d8cefa1f1ec33a5a829e3_5f1001c874b19d21f44da1e2_safepay_logo.svg',
 	/**
 	 * Returns if this payment method should be active. If false, the scripts will not be enqueued.
 	 *
@@ -88,9 +92,12 @@ final class WC_Safepay_Gateway_Blocks_Support extends AbstractPaymentMethodType
 	 */
 	public function get_payment_method_data()
 	{
+		// 'icon' => 'https://uploads-ssl.webflow.com/5f2d8cefa1f1ec3622a82394/5f2d8cefa1f1ec33a5a829e3_5f1001c874b19d21f44da1e2_safepay_logo.svg',
+		$plugin_image_url =  plugins_url( "/safepay-plugin/assets/images/card.svg", 'safepay-plugin' );
 		return [
 			'title'       => $this->get_setting('title'),
 			'description' => $this->get_setting('description'),
+			'icon'=> 		$plugin_image_url,
 			'supports'    => array_filter($this->gateway->supports, [$this->gateway, 'supports'])
 		];
 	}
