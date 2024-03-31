@@ -24,12 +24,12 @@ class WC_SafePay_Request
 	{
 		$this->gateway = $gateway;
 		$this->orderId = $orderId;
-		$this->order =  wc_get_order($orderId);
+		$this->order = wc_get_order($orderId);
 	}
 
 	private function get_payment_url($sandbox = false)
 	{
-		$payment_url =   sprintf("%s/Ecommerce/api/Transaction/PostTransaction", $this->gateway->baseUrl);
+		$payment_url = sprintf("%s/Ecommerce/api/Transaction/PostTransaction", $this->gateway->baseUrl);
 		return $payment_url;
 	}
 
@@ -39,7 +39,7 @@ class WC_SafePay_Request
 		$safepay_form[] = '<form action="' . esc_url($this->get_payment_url()) . '" method="post" id="safepay_payment_form" name="safepay_payment_form">';
 
 		foreach ($safepay_args as $key => $value) {
-			$safepay_form[] = sprintf('<input type="hidden" name="%s" value="%s" />',  esc_attr($key), esc_attr($value));
+			$safepay_form[] = sprintf('<input type="hidden" name="%s" value="%s" />', esc_attr($key), esc_attr($value));
 		}
 
 		$safepay_form[] = '</form>';
@@ -58,7 +58,7 @@ class WC_SafePay_Request
 			die();
 		}
 
-		$site_url =   sprintf("%s/wc-api/%s?", get_site_url(), $this->responseCallBackUrl);
+		$site_url = sprintf("%s/wc-api/%s?", get_site_url(), $this->responseCallBackUrl);
 
 		$successUrl = $site_url;
 		$successUrl .= "redirect=Y&order_id=" . $order->get_id();
@@ -105,7 +105,7 @@ class WC_SafePay_Request
 			'CHECKOUT_URL' => urlencode($backend_callback),
 			'TRAN_TYPE' => 'ECOMM_PURCHASE',
 			'STORE_ID' => $this->gateway->storeId,
-			'CURRENCY_CODE' =>  get_woocommerce_currency()
+			'CURRENCY_CODE' => get_woocommerce_currency()
 		);
 
 		return $payload;

@@ -40,7 +40,7 @@ class WC_SafePay_Response
 				echo "Unauthorized Order (Invalid Response Key)";
 				return;
 			}
-			
+
 			wc_add_notice('Order could not be authorized.', 'error');
 			wp_redirect(wc_get_checkout_url());
 			return;
@@ -115,7 +115,7 @@ class WC_SafePay_Response
 
 			update_post_meta($order_id, 'safepay_txn_completed', $safepay_message);
 
-			
+
 			if ($redirect == "Y") {
 				wp_redirect($this->gateway->get_return_url($order));
 				return;

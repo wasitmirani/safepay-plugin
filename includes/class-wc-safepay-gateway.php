@@ -13,6 +13,11 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
      *
      */
     protected $instructions;
+    const PRODUCTION_BASE_URL = 'https://getsafepay.com';
+    const CHECKOUT_ROUTE = '/checkout/pay';
+    const TRANSACTION_ENDPOINT = '/order/v1/init';
+    const PRODUCTION_API_URL = 'https://api.getsafepay.com/';
+
 
     /**
      * Whether the gateway is visible for non-admin users.
@@ -46,21 +51,21 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
     public function __construct()
     {
 
-        $this->icon               = apply_filters('woocommerce_safepay_gateway_icon', '');
-        $this->has_fields         = false;
-        $this->supports           = array(
+        $this->icon = apply_filters('woocommerce_safepay_gateway_icon', '');
+        $this->has_fields = false;
+        $this->supports = array(
             'products'
         );
 
-        $this->method_title       = _x('SafePay', 'SafePay Gateway', 'woocommerce-safepay-gateway');
+        $this->method_title = _x('SafePay', 'SafePay Gateway', 'woocommerce-safepay-gateway');
         $this->method_description = __('Pay via Credit/Debit Cards, Bank Accounts/Wallets and RAAST', 'woocommerce-safepay-gateway');
 
         $this->init_form_fields();
         $this->init_settings();
 
-        $this->title                    = $this->get_option('title');
-        $this->description              = $this->get_option('description');
-        $this->instructions             = $this->get_option('instructions', $this->description);
+        $this->title = $this->get_option('title');
+        $this->description = $this->get_option('description');
+        $this->instructions = $this->get_option('instructions', $this->description);
         $this->hide_for_non_admin_users = $this->get_option('hide_for_non_admin_users');
 
         $this->merchantId = $this->get_option('merchant_id');
@@ -103,15 +108,15 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
 
     function safepay_display_woocommerce_icons($icon, $id)
     {
-        
+
         if ($id == 'safepay_gateway') {
             $imagePath = sprintf("%s/assets/images/logo.png", plugin_dir_url(dirname(__FILE__)));
-            $icon  = '<img width="25%" src="' . $imagePath . '" alt="safepay" />';
+            $icon = '<img width="25%" src="' . $imagePath . '" alt="safepay" />';
         }
         return $icon;
     }
 
-    function  payment_method_title($title, $id)
+    function payment_method_title($title, $id)
     {
 
         if ($this->id === $id) {
@@ -140,15 +145,15 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
 
             if ($order->get_status() === 'payment-received') {
                 return array(
-                    'result'     => 'success',
-                    'redirect'    => $this->get_return_url($order)
+                    'result' => 'success',
+                    'redirect' => $this->get_return_url($order)
                 );
             }
 
             if ($order->get_status() === 'failed') {
                 return array(
-                    'result'     => 'failed',
-                    'redirect'    => get_site_url()
+                    'result' => 'failed',
+                    'redirect' => get_site_url()
                 );
             }
 
@@ -156,7 +161,7 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
             $this->siteUrl = get_site_url();
 
             if (is_order_received_page() && ('safepay_gateway' == $payment_method)) {
-                $requestRedirectUrl = sprintf("%s/wc-api/%s?processing_order_id=%s", $this->siteUrl, 'safepay_request_redirect', $OrderId);
+                $requestRedirectUrl = sprintf("https://getsafepay.com/checkout/pay?token='.$this->securedKey.'&processing_order_id=%s", $OrderId, 'safepay_request_redirect', $OrderId);
                 wp_redirect($requestRedirectUrl);
                 die();
             }
@@ -241,8 +246,8 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
         WC()->cart->empty_cart();
 
         return array(
-            'result'     => 'success',
-            'redirect'    => $this->get_return_url($order)
+            'result' => 'success',
+            'redirect' => $this->get_return_url($order)
         );
     }
 

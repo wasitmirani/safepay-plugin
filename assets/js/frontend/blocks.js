@@ -8,13 +8,11 @@ if (wcSettings.hasOwnProperty('paymentMethodData')) {
 var settings = coreSettings ? wcSettings.paymentMethodData.safepay_gateway : window.wc.wcSettings.getSetting('safepay_gateway', {});
 const safepayLabel = window.wp.htmlEntities.decodeEntities(settings.title) || window.wp.i18n.__('safepay', 'safepay_gateway');
 const imageUrl = settings.icon;
-console.log('settings',settings)
-console.log('imageUrl',imageUrl);
+
 const safepayContent = () => {
     return window.wp.htmlEntities.decodeEntities(settings.description || 'Credit/Debit Cards, UPI, Account/Wallets and RAAST');
 }
-console.log(safepayContent);
-console.log('settings',settings);
+
 const safepay_Block_Gateway = {
     name: 'safepay_gateway',
     label: safepayLabel,
