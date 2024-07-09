@@ -14,8 +14,10 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
      */
     protected $instructions;
     const PRODUCTION_BASE_URL = 'https://getsafepay.com';
+    const SANDBOX_BASE_URL = 'https://sandbox.api.getsafepay.com';
+    const DEVELOPMENT_BASE_URL = 'https://dev.api.getsafepay.com';
     const CHECKOUT_ROUTE = '/checkout/pay';
-    const TRANSACTION_ENDPOINT = '/order/v1/init';
+    const TRANSACTION_ENDPOINT = '/order/payments/v3/';
     const PRODUCTION_API_URL = 'https://api.getsafepay.com/';
 
 
@@ -36,6 +38,8 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
     private $siteUrl;
 
     public $merchantId;
+
+    public $appEnv;
 
     public $securedKey;
 
@@ -72,6 +76,7 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
         $this->securedKey = $this->get_option('security_key');
         $this->storeId = $this->get_option('store_id');
         $this->baseUrl = $this->get_option('base_url');
+        $this->appEnv = $this->get_option('app_env');
 
         $this->siteUrl = get_site_url();
 
@@ -81,6 +86,8 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
         add_filter('woocommerce_gateway_title', array($this, 'payment_method_title'), 10, 2);
 
         add_action('woocommerce_order_status_changed', array($this, 'custom_update_order_status'), 10, 3);
+        add_action('woocommerce_thankyou', 'custom_redirect_and_update_order_status');
+
 
 
         add_action('woocommerce_receipt_' . $this->id, array($this, 'process_order_request'));
@@ -135,7 +142,105 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
     {
         add_rewrite_endpoint('my-temp-page', EP_ROOT | EP_PAGES);
     }
+    private function get_env_url()
+    {
+        switch ($this->appEnv) {
+            case 'development':
+                return 'https://dev.api.getsafepay.com'; // Replace with actual development URL
+            case 'sandbox':
+                return 'https://sandbox.api.getsafepay.com'; // Replace with actual staging URL
+            default:
+                return 'https://api.getsafepay.com'; // Replace with actual production URL
+        }
+    }
+    private function call_api_to_get_token($method, $endpoint, $params, $baseURL, $securedKey)
+    {
 
+        $args = array(
+            'method'  => $method,
+            'headers' => array(
+                'Content-Type' => 'application/json',
+                'X-SFPY-MERCHANT-SECRET' => $securedKey,
+            ),
+            'body'    => json_encode($params),
+        );
+        $tokenEndpoint = '/client/passport/v1/token';
+
+        $tokenURL = $baseURL . $tokenEndpoint;
+        if (WP_DEBUG) {
+            error_log("Request URL tokenURL: $tokenURL");
+            error_log("Request Args tokenURL: " . print_r($args, true));
+        }
+        $responseData = wp_remote_post(esc_url_raw($tokenURL), $args);
+        if (is_wp_error($responseData)) {
+            if (WP_DEBUG) {
+                error_log("cURL error: " . $responseData->get_error_message());
+                echo "cURL error: " . $responseData->get_error_message()."<br>";
+            }
+            return array(false, $responseData->get_error_message());
+        } else {
+            $userToken = json_decode($responseData['body'], true);
+            $code = $responseData['response']['code'];
+
+            if (WP_DEBUG) {
+                error_log("Response Code userToken: $code");
+                echo "Response Code userToken: $code"."<br>";
+                echo "Response BodyuserToken: " . print_r($userToken, true);
+                error_log("Response BodyuserToken: " . print_r($userToken, true));
+            }
+        }
+
+        $url = $baseURL . $endpoint;
+
+        if (WP_DEBUG) {
+            error_log("Request URL: $url");
+            error_log("Request Args: " . print_r($args, true));
+        }
+
+        $response = wp_remote_post(esc_url_raw($url), $args);
+
+        if (is_wp_error($response)) {
+            if (WP_DEBUG) {
+                error_log("cURL error: " . $response->get_error_message());
+            }
+            echo "cURL error: " . $response->get_error_message();
+            return array(false, $response->get_error_message());
+        } else {
+            $result = json_decode($response['body'], true);
+            $code = $response['response']['code'];
+
+            if (WP_DEBUG) {
+                error_log("Response Code: $code");
+                error_log("Response Body: " . print_r($result, true));
+            }
+
+            if ($code === 201) {
+                return array(true, $userToken, $result);
+            } else {
+                return array(false, $code);
+            }
+        }
+    }
+
+
+    public function getBaseURL(){
+        $url =  self::PRODUCTION_API_URL;
+        switch ($this->appEnv) {
+            case 'development':
+                $url = self::DEVELOPMENT_BASE_URL; // Replace with actual development URL
+                break; 
+            case 'sandbox':
+                $url =  self::SANDBOX_BASE_URL; // Replace with actual staging URL
+                break; 
+            case 'production':
+                $url =  self::PRODUCTION_API_URL; // Replace with actual production URL
+                break;
+            default:
+                $url =  self::PRODUCTION_API_URL; // Replace with actual production URL
+                break;
+        }
+        return $url;
+    }
     public function process_order_place()
     {
         if (get_query_var('order-received')) {
@@ -157,17 +262,75 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
                 );
             }
 
+            $args["amount"] = (int) ($order->get_total() * 100);
+            $args["intent"] = "CYBERSOURCE";
+            $args["mode"] = "payment";
+            $args["currency"] = get_woocommerce_currency();
+            $args["merchant_api_key"] = $this->merchantId;
+
+            $baseURL = $this->get_env_url();
+          
+            list($success, $userToken, $result) = $this->call_api_to_get_token('POST', '/order/payments/v3/', $args, $baseURL, $this->securedKey);
+            if ( !$success) {
+                return false;
+            }
+            $tracker = $result['data']['tracker']['token'];
+
             $payment_method = $order->get_payment_method();
             $this->siteUrl = get_site_url();
+            $userToken = $userToken['data'];
+            
+            $site_url = sprintf("%s/checkout/order-received/%s?", get_site_url(),$order->get_id());
+     
+            $successUrl = $site_url;
+            $successUrl .= "&order_id=" . $order->get_id();
+            echo $successUrl;
+            error_log("Redirect URL: " . $successUrl);
+            $failUrl = $site_url;
+            $failUrl .= "&order_id=" . $order->get_id();
 
+            $backend_callback = $site_url;
+            $backend_callback .= "order_id=" . $order->get_id();
+
+		    $orderDate = date('Y-m-d H:i:s', time());
+            $successUrl = urlencode($successUrl);
+            $failUrl = urlencode($failUrl);
+            $url = $this->getBaseURL();
             if (is_order_received_page() && ('safepay_gateway' == $payment_method)) {
-                $requestRedirectUrl = sprintf("https://getsafepay.com/checkout/pay?token='.$this->securedKey.'&processing_order_id=%s", $OrderId, 'safepay_request_redirect', $OrderId);
-                wp_redirect($requestRedirectUrl);
-                die();
+                if (isset($success) && $success) {
+                    $token = $result['token'];
+    
+                    $requestRedirectUrl = $url . "/embedded/?tbt=$userToken&tracker=$tracker&order_id=$OrderId&environment=$this->appEnv&source=woocommerce&redirect_url=$successUrl&cancel_url=$failUrl";
+                    echo $requestRedirectUrl;
+                    error_log("Checkout URL: " . $requestRedirectUrl);
+                    wp_redirect($requestRedirectUrl);
+                    die();
+                } else {
+                    // Log API call failure
+                    if (WP_DEBUG) {
+                        error_log("API call failed: " . $result);
+                        echo "API call failed: " . $result;
+                    }
+                }
             }
         }
     }
-
+    function custom_redirect_and_update_order_status($order_id) {
+        // Get the order object
+        $order = wc_get_order($order_id);
+        
+        // Example: Update order status to 'completed'
+        $order->update_status('completed');
+    
+        // Construct the redirect URL
+        $site_url = get_site_url();
+        $redirect_url = trailingslashit($site_url) . '/checkout/order-received/' . $order->get_id() . '/';
+        $redirect_url .= '?order_id=' . $order->get_id();
+    
+        // Perform the redirect
+        wp_redirect($redirect_url);
+        exit;
+    }
     private function enqueue_scripts()
     {
         wp_enqueue_script($this->id . time(), plugin_dir_url(__FILE__) . '../assets/js/safepay-payment-form-woocommerce.js', array('jquery'), time(), true);
@@ -187,6 +350,19 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
                 'description' => __('Enable or disable the gateway.', 'woocommerce-safepay-gateway'),
                 'desc_tip' => false,
                 'default' => 'yes'
+            ),
+            'app_env' => array(
+                'title' => __('Environment', 'woocommerce-safepay-gateway'),
+                'type' => 'select',
+                'label' => __('Environment', 'woocommerce-safepay-gateway'),
+                'description' => __('Choose the environment.', 'woocommerce-safepay-gateway'),
+                'desc_tip' => false,
+                'default' => 'yes',
+                'options' => array(
+                    'development' => __('Development', 'woocommerce-safepay-gateway'),
+                    'sandbox' => __('Sandbox', 'woocommerce-safepay-gateway'),
+                    'production' => __('Production', 'woocommerce-safepay-gateway')
+                )
             ),
             'title' => array(
                 'title' => __('Title at checkout', 'woocommerce-safepay-gateway'),
@@ -226,13 +402,42 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
                 'desc_tip' => true,
                 'default' => 'https://www.getsafepay.pk'
             ),
-            'store_id' => array(
-                'title' => __('Store ID', 'woocommerce-safepay-gateway'),
+            'production_webhook_secret' => array(
+                'title' => __('Production Shared Secret', 'woocommerce-safepay-gateway'),
                 'type' => 'text',
-                'description' => __('Merchant\'s Store/Terminal/Outlet ID.', 'woocommerce-safepay-gateway'),
+                'description' =>
+                // translators: Instructions for setting up 'webhook shared secrets' on settings page.
+                __('Using webhook secret keys allows Safepay to verify each payment. To get your live webhook key:')
+                    . '<br /><br />' .
+
+                    // translators: Step 1 of the instructions for 'webhook shared secrets' on settings page.
+                    __('1. Navigate to your Live Safepay dashboard by clicking <a target="_blank" href="https://getsafepay.com/dashboard/webhooks">here</a>')
+
+                    . '<br />' .
+
+                    // translators: Step 2 of the instructions for 'webhook shared secrets' on settings page. Includes webhook URL.
+                    sprintf(__('2. Click \'Add an endpoint\' and paste the following URL: %s', 'Safepay'), add_query_arg('wc-api', 'WC_Safepay',get_site_url()))
+
+                    . '<br />' .
+
+                    // translators: Step 3 of the instructions for 'webhook shared secrets' on settings page.
+                    __('3. Make sure to select "Send me all events", to receive all payment updates.', 'Safepay')
+
+                    . '<br />' .
+
+                    // translators: Step 4 of the instructions for 'webhook shared secrets' on settings page.
+                    __('4. Click "Show shared secret" and paste into the box above.', 'Safepay'),
+
                 'desc_tip' => true,
-                'default' => ''
-            )
+                'default' => get_site_url(),
+            ),
+            // 'cancel_url' => array(
+            //     'title' => __('Cancel URL', 'woocommerce-safepay-gateway'),
+            //     'type' => 'text',
+            //     'description' => __('Cancel URL', 'woocommerce-safepay-gateway'),
+            //     'desc_tip' => true,
+            //     'default' => ''
+            // )
         );
     }
 

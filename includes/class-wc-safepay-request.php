@@ -58,7 +58,7 @@ class WC_SafePay_Request
 			die();
 		}
 
-		$site_url = sprintf("%s/wc-api/%s?", get_site_url(), $this->responseCallBackUrl);
+		$site_url = sprintf("/checkout/order-received/%s?", get_site_url(), $this->responseCallBackUrl);
 
 		$successUrl = $site_url;
 		$successUrl .= "redirect=Y&order_id=" . $order->get_id();
@@ -89,23 +89,19 @@ class WC_SafePay_Request
 
 		$payload = array(
 			'MERCHANT_ID' => $this->gateway->merchantId,
-			'MERCHANT_NAME' => get_bloginfo(),
-			'TOKEN' => $token,
-			'PROCCODE' => '00',
-			'TXNAMT' => $order->get_total(),
+			'env' => $this->gateway->app_env,
+			'beacon' => $token,
+			'mode' => 'payment-raw',
+			'amount' => $order->get_total(),
 			'CUSTOMER_MOBILE_NO' => $order->get_billing_phone(),
 			'CUSTOMER_EMAIL_ADDRESS' => $order->get_billing_email(),
-			'SIGNATURE' => $signature,
-			'PLUGIN_VERSION' => 'WOOCOM-BLOCK-CO-safepay-2.0',
-			'TXNDESC' => 'Products purchased from ' . get_bloginfo('name'),
-			'SUCCESS_URL' => urlencode($successUrl),
-			'FAILURE_URL' => urlencode($failUrl),
-			'BASKET_ID' => $order->get_order_number(),
-			'ORDER_DATE' => $orderDate,
+			'redirect_url' => urlencode($successUrl),
+			'cancel_url' => urlencode($failUrl),
+			'order_id' => $order->get_order_number(),
+			'order_date' => $orderDate,
 			'CHECKOUT_URL' => urlencode($backend_callback),
-			'TRAN_TYPE' => 'ECOMM_PURCHASE',
 			'STORE_ID' => $this->gateway->storeId,
-			'CURRENCY_CODE' => get_woocommerce_currency()
+			'currency' => get_woocommerce_currency()
 		);
 
 		return $payload;
