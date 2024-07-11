@@ -33,20 +33,16 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
      * @var string
      *
      */
+    // Unique ID for the gateway
     public $id = 'safepay_gateway';
 
+    // Class properties
     private $siteUrl;
-
     public $merchantId;
-
     public $appEnv;
-
     public $securedKey;
-
     public $storeId;
-
     public $baseUrl;
-
     private $processRequestPayment = false;
 
     /**
@@ -86,7 +82,7 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
         add_filter('woocommerce_gateway_title', array($this, 'payment_method_title'), 10, 2);
 
         add_action('woocommerce_order_status_changed', array($this, 'custom_update_order_status'), 10, 3);
-        add_action('woocommerce_thankyou', 'custom_redirect_and_update_order_status');
+        // add_action('woocommerce_thankyou', 'custom_redirect_and_update_order_status');
 
 
 
@@ -111,8 +107,26 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
          * processing order
          */
         add_action('wp', array($this, 'process_order_place'));
-    }
+		
+        add_action('rest_api_init', function () {
+		register_rest_route('safepay/v1', '/safepay-transaction-success/(?P<order_id>\d+)', array(
+				'methods' => 'GET',
+				'callback' => array($this, 'get_order_success_url'),
+			    'permission_callback' => '__return_true', // Adjust permissions as needed
 
+				 // Adjust permissions as needed
+			));
+
+		register_rest_route('safepay/v1', '/order-webhook/', array(
+				'methods' => 'POST',
+				'callback' => array($this, 'handle_webhook'),
+			    'permission_callback' => '__return_true', // Adjust permissions as needed
+
+				 // Adjust permissions as needed
+			));
+		});
+    }
+	
     function safepay_display_woocommerce_icons($icon, $id)
     {
 
@@ -165,8 +179,10 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
             'body'    => json_encode($params),
         );
         $tokenEndpoint = '/client/passport/v1/token';
+		$metaDataEndpoint = "/order/payments/v3";
 
         $tokenURL = $baseURL . $tokenEndpoint;
+		$metaDataURL = $baseURL . $metaDataEndpoint;
         if (WP_DEBUG) {
             error_log("Request URL tokenURL: $tokenURL");
             error_log("Request Args tokenURL: " . print_r($args, true));
@@ -211,10 +227,29 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
 
             if (WP_DEBUG) {
                 error_log("Response Code: $code");
-                error_log("Response Body: " . print_r($result, true));
+                error_log("Tracker Response Body: " . print_r($result, true));
             }
 
             if ($code === 201) {
+
+					$meta_payload = array(
+						'method'  => 'POST',
+						'headers' => array(
+							'Content-Type' => 'application/json',
+							'X-SFPY-MERCHANT-SECRET' => $securedKey,
+						),
+						'body'=> json_encode(['data'=>[
+							"source" => (string)$params['source'],
+							"order_id"=> (string)$params['order_id'],
+							]]),
+					);
+				     $responseData = wp_remote_post(esc_url_raw($metaDataURL.'/'.$result['data']['tracker']['token'].'/metadata'), 	$meta_payload );
+				     $meta_result = json_decode($responseData['body'], true);
+				     $meta_code = $responseData['response']['code'];
+					error_log("metaData Response Code: $meta_code");
+					error_log("metaData Body ".print_r($meta_payload));
+					error_log("metaDataURL= ".$metaDataURL.'/'.$result['data']['tracker']['token'].'/metadata');
+					error_log("metaData Response Body: " . print_r($meta_result, true));
                 return array(true, $userToken, $result);
             } else {
                 return array(false, $code);
@@ -233,19 +268,144 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
                 $url =  self::SANDBOX_BASE_URL; // Replace with actual staging URL
                 break; 
             case 'production':
-                $url =  self::PRODUCTION_API_URL; // Replace with actual production URL
+                $url =  self::PRODUCTION_BASE_URL; // Replace with actual production URL
                 break;
             default:
-                $url =  self::PRODUCTION_API_URL; // Replace with actual production URL
+                $url =  self::PRODUCTION_BASE_URL; // Replace with actual production URL
                 break;
         }
         return $url;
     }
+   
+    function handle_webhook($request){
+		
+	 // Get the body data from the request
+    $parameters = $request->get_json_params();
+
+    // Validate and process the body data
+    if (empty($parameters) || !isset($parameters['data'])) {
+        return new WP_Error('no_data', 'No data provided', array('status' => 400));
+    }
+
+    $data = $parameters['data'];
+
+    // Sanitize and validate each field as necessary
+    $tracker = sanitize_text_field($data['tracker']);
+    $intent = sanitize_text_field($data['intent']);
+    $state = sanitize_text_field($data['state']);
+    $net = intval($data['net']);
+    $fee = intval($data['fee']);
+    $customer_email = sanitize_email($data['customer_email']);
+    $amount = intval($data['amount']);
+    $currency = sanitize_text_field($data['currency']);
+    $metadata = isset($data['metadata']) ? $data['metadata'] : array();
+    $charged_at_seconds = intval($data['charged_at']['seconds']);
+    $charged_at_nanos = intval($data['charged_at']['nanos']);
+		
+     $OrderId = absint($data['metadata']['order_id'] ?? 0);
+     $order = wc_get_order($OrderId);
+	 if($state == 'TRACKER_ENDED'){
+		 	  $order->update_status('payment-received');
+		 	$order_note_message = 'Payment has been received successfully. Transaction reference ID: ' . $tracker;
+		 	$order->update_meta_data('_transaction_ref_id', $tracker);
+			 $order->add_order_note($order_note_message);
+			// Save the order to persist the changes
+    			$order->save();
+
+			   return array(
+                        'result' => 'success',
+                        'redirect' => $this->get_return_url($order)
+                    );
+	 }
+	else {
+			 $order->update_status('failed');
+			$order_note_message = 'Payment has been received failed. Transaction reference ID: ' . $tracker;
+		 	$order->update_meta_data('_transaction_ref_id', $tracker);
+			 $order->add_order_note($order_note_message);
+			// Save the order to persist the changes
+    			$order->save();
+			   return array(
+                        'result' => 'failed',
+                        'redirect' => $this->get_return_url($order)
+            );
+	}
+    
+    // Do something with the data (e.g., save it to the database, etc.)
+    
+    return rest_ensure_response($response_data);
+	}
+    function get_order_success_url($request) {
+        // Retrieve order_id from URL parameter
+        // 
+   
+    	$order_id = $request->get_param('order_id');
+		print_r($order_id);
+        $order = wc_get_order($order_id);
+        
+        if (!$order) {
+            return new WP_Error('no_order', 'Order not found', array('status' => 404));
+        }
+        
+        $site_url = sprintf("%s/checkout/order-received/%s?", get_site_url(), $order->get_id());
+        $successUrl = $site_url;
+        $successUrl .= "&order_id=" . $order->get_id() . '&ispaid=true';
+
+		
+    // Update order status and perform any necessary actions
+// 		$order->update_status('payment-received');
+// 		$order->delete_meta_data('safepay_gateway_transaction_success');
+// 		$order->save();
+
+    // Redirect user to the return URL
+   		 $return_url = $this->get_return_url($order);
+		wp_redirect($return_url);
+    	 exit; // Ensure to exit after redirection
+        
+     
+    }
     public function process_order_place()
     {
+ 
+
+//         if (isset($_GET['ispaid']) && get_query_var('order-received')) {
+//             // Get the value of the 'ispaid' parameter
+//             $isPaid = $_GET['ispaid'];
+        
+//             // Perform actions based on the value of 'ispaid'
+//             if ($isPaid == 'true') {
+//                 $OrderId = absint(get_query_var('order-received'));
+//                 $order = wc_get_order($OrderId);
+//                 error_log("order-received: " . $OrderId);
+//                 $order->delete_meta_data('safepay_gateway_transaction_success');
+//                   // Example: Update order status to 'completed'
+              
+//                   $order->update_status('payment-received');
+//                 if ($order->get_status() === 'payment-received') {
+//                     return array(
+//                         'result' => 'success',
+//                         'redirect' => $this->get_return_url($order)
+//                     );
+//                 }
+//                 // Perform actions for paid users
+//             } else {
+//                 echo 'The user has not paid.';
+//                 $order->update_status('failed');
+//                 if ($order->get_status() === 'failed') {
+//                     return array(
+//                         'result' => 'failed',
+//                         'redirect' => get_site_url()
+//                     );
+//                 }
+//                 // Perform actions for non-paid users
+//             }
+//         } 
+
+
+     
         if (get_query_var('order-received')) {
             $OrderId = absint(get_query_var('order-received'));
             $order = wc_get_order($OrderId);
+            error_log("order-received: " . $OrderId);
             $order->delete_meta_data('safepay_gateway_transaction_success');
 
             if ($order->get_status() === 'payment-received') {
@@ -255,18 +415,15 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
                 );
             }
 
-            if ($order->get_status() === 'failed') {
-                return array(
-                    'result' => 'failed',
-                    'redirect' => get_site_url()
-                );
-            }
+           
 
             $args["amount"] = (int) ($order->get_total() * 100);
             $args["intent"] = "CYBERSOURCE";
             $args["mode"] = "payment";
             $args["currency"] = get_woocommerce_currency();
             $args["merchant_api_key"] = $this->merchantId;
+			$args['order_id'] =  $OrderId;
+			$args['source'] = 'woocommerce';
 
             $baseURL = $this->get_env_url();
           
@@ -279,22 +436,19 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
             $payment_method = $order->get_payment_method();
             $this->siteUrl = get_site_url();
             $userToken = $userToken['data'];
-            
-            $site_url = sprintf("%s/checkout/order-received/%s?", get_site_url(),$order->get_id());
-     
+            $site_url = sprintf("%s/wp-json/safepay/v1/safepay-transaction-success/%s?", get_site_url(),$order->get_id());
             $successUrl = $site_url;
-            $successUrl .= "&order_id=" . $order->get_id();
-            echo $successUrl;
-            error_log("Redirect URL: " . $successUrl);
+            $successUrl .= "&order_id=" . $order->get_id().'&ispaid=true';
+
             $failUrl = $site_url;
-            $failUrl .= "&order_id=" . $order->get_id();
+            $failUrl .= "&order_id=" . $order->get_id().'&ispaid=false';
 
             $backend_callback = $site_url;
             $backend_callback .= "order_id=" . $order->get_id();
 
 		    $orderDate = date('Y-m-d H:i:s', time());
-            $successUrl = urlencode($successUrl);
-            $failUrl = urlencode($failUrl);
+            // $successUrl = urlencode($successUrl);
+            // $failUrl = urlencode($failUrl);
             $url = $this->getBaseURL();
             if (is_order_received_page() && ('safepay_gateway' == $payment_method)) {
                 if (isset($success) && $success) {
@@ -324,11 +478,11 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
     
         // Construct the redirect URL
         $site_url = get_site_url();
-        $redirect_url = trailingslashit($site_url) . '/checkout/order-received/' . $order->get_id() . '/';
+        // $redirect_url = trailingslashit($site_url) . '/checkout/order-received/' . $order->get_id() . '/';
         $redirect_url .= '?order_id=' . $order->get_id();
     
         // Perform the redirect
-        wp_redirect($redirect_url);
+        // wp_redirect($redirect_url);
         exit;
     }
     private function enqueue_scripts()
@@ -403,7 +557,7 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
                 'default' => 'https://www.getsafepay.pk'
             ),
             'production_webhook_secret' => array(
-                'title' => __('Production Shared Secret', 'woocommerce-safepay-gateway'),
+                'title' => __('Production Webhook Secret', 'woocommerce-safepay-gateway'),
                 'type' => 'text',
                 'description' =>
                 // translators: Instructions for setting up 'webhook shared secrets' on settings page.
@@ -416,7 +570,7 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
                     . '<br />' .
 
                     // translators: Step 2 of the instructions for 'webhook shared secrets' on settings page. Includes webhook URL.
-                    sprintf(__('2. Click \'Add an endpoint\' and paste the following URL: %s', 'Safepay'), add_query_arg('wc-api', 'WC_Safepay',get_site_url()))
+                    sprintf(__('2. Click \'Add an endpoint\' and paste the following URL: %s', 'Safepay'), add_query_arg('/wp-json/safepay/v1/order-webhook/', 'WC_Safepay',get_site_url()))
 
                     . '<br />' .
 
@@ -428,8 +582,37 @@ class WC_Safepay_Gateway extends WC_Payment_Gateway
                     // translators: Step 4 of the instructions for 'webhook shared secrets' on settings page.
                     __('4. Click "Show shared secret" and paste into the box above.', 'Safepay'),
 
-                'desc_tip' => true,
-                'default' => get_site_url(),
+                'desc_tip' => false,
+                'default' => sprintf("%s/wp-json/safepay/v1/order-webhook/%s?", get_site_url(),$this->get_option('merchant_id') ?? ''),
+            ),
+			'sandbox_webhook_secret' => array(
+                'title' => __('Sandbox Webhook Secret', 'woocommerce-safepay-gateway'),
+                'type' => 'text',
+                'description' =>
+                // translators: Instructions for setting up 'webhook shared secrets' on settings page.
+                __('Using webhook secret keys allows Safepay to verify each payment. To get your live webhook key:')
+                    . '<br /><br />' .
+
+                    // translators: Step 1 of the instructions for 'webhook shared secrets' on settings page.
+                    __('1. Navigate to your Live Safepay dashboard by clicking <a target="_blank" href="https://getsafepay.com/dashboard/webhooks">here</a>')
+
+                    . '<br />' .
+
+                    // translators: Step 2 of the instructions for 'webhook shared secrets' on settings page. Includes webhook URL.
+                    sprintf(__('2. Click \'Add an endpoint\' and paste the following URL: %s', 'Safepay'),add_query_arg('/wp-json/safepay/v1/order-webhook/', 'WC_Safepay',get_site_url()))
+
+                    . '<br />' .
+
+                    // translators: Step 3 of the instructions for 'webhook shared secrets' on settings page.
+                    __('3. Make sure to select "Send me all events", to receive all payment updates.', 'Safepay')
+
+                    . '<br />' .
+
+                    // translators: Step 4 of the instructions for 'webhook shared secrets' on settings page.
+                    __('4. Click "Show shared secret" and paste into the box above.', 'Safepay'),
+
+                'desc_tip' => false,
+                'default' => sprintf("%s/wp-json/safepay/v1/order-webhook/%s?", get_site_url(),$this->get_option('merchant_id') ?? ''),
             ),
             // 'cancel_url' => array(
             //     'title' => __('Cancel URL', 'woocommerce-safepay-gateway'),
